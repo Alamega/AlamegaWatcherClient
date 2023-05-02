@@ -3,17 +3,11 @@ package com.alamega;
 import com.profesorfalken.jsensors.JSensors;
 import com.profesorfalken.jsensors.model.components.Components;
 import com.profesorfalken.jsensors.model.components.Cpu;
-import com.profesorfalken.jsensors.model.sensors.Temperature;
-import com.sun.jna.Library;
-import com.sun.jna.Native;
-import com.sun.jna.platform.win32.Kernel32;
-import com.sun.jna.platform.win32.WinBase;
-import com.sun.jna.platform.win32.WinDef;
-import com.sun.jna.ptr.IntByReference;
-import com.sun.jna.win32.StdCallLibrary;
-import com.sun.jna.win32.W32APIFunctionMapper;
-import com.sun.jna.win32.W32APITypeMapper;
+import com.profesorfalken.jsensors.model.components.Disk;
+import com.profesorfalken.jsensors.model.components.Gpu;
 import com.sun.management.OperatingSystemMXBean;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -24,28 +18,23 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.UnknownHostException;
-import java.util.*;
 
 public class SystemScanner {
-    final static int MB = 1024*1024;
     final static int GB = 1024*1024*1024;
-
-    final static OperatingSystemMXBean osBean = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
     static OperatingSystemMXBean osMBean = null;
 
     static {
         try {
             osMBean = ManagementFactory.newPlatformMXBeanProxy(ManagementFactory.getPlatformMBeanServer(), ManagementFactory.OPERATING_SYSTEM_MXBEAN_NAME, OperatingSystemMXBean.class);
         } catch (IOException e) {
-            System.out.println("Ошибка при получении данных о процессоре.");
+            System.out.println("Ошибка при получении данных о процессоре: " + e.getMessage());
         }
     }
 
     public static String getMACAddress(){
         //Получение MAC адреса устройства
-        InetAddress localHost = null;
         try {
-            localHost = InetAddress.getLocalHost();
+            InetAddress localHost = InetAddress.getLocalHost();
             NetworkInterface ni = NetworkInterface.getByInetAddress(localHost);
             byte[] hardwareAddress = ni.getHardwareAddress();
             String[] hexadecimal = new String[hardwareAddress.length];
@@ -54,24 +43,42 @@ public class SystemScanner {
             }
             return String.join(":", hexadecimal);
         } catch (UnknownHostException | SocketException e) {
-            System.out.println("Ошибка при получении MAC-адреса: " + e);;
+            System.out.println("Ошибка при получении MAC-адреса: " + e.getMessage());
         }
         return null;
     }
 
-    public static Map<String, String> getAllDiscUsage(){
-        Map<String, String> drivers = new LinkedHashMap<>();
+    public static JSONArray getAllDiscUsage(){
+        JSONArray resultJson = new JSONArray();
         for(File driver:File.listRoots())
         {
             if (!((double)driver.getTotalSpace() <= 0)) {
-                drivers.put(driver.toString(), String.format("%.2f", (double)driver.getTotalSpace()/GB - (double)driver.getUsableSpace()/GB) + "/" + String.format("%.2f", (double)driver.getTotalSpace()/GB));
+                JSONObject tempJson = new JSONObject();
+                tempJson.put("name", driver.toString());
+                tempJson.put("usage", (double)driver.getTotalSpace()/GB-(double)driver.getUsableSpace()/GB);
+                tempJson.put("free", (double)driver.getUsableSpace()/GB);
+                tempJson.put("total", (double)driver.getTotalSpace()/GB);
+                resultJson.put(tempJson);
             }
         }
-        return drivers;
+        return resultJson;
+    }
+
+    public static JSONArray getAllPhysicalDiscUsage(){
+        Components components = JSensors.get.components();
+        JSONArray resultJson = new JSONArray();
+        for (int i = 0; i < components.disks.size(); i++) {
+            Disk tempDisc = components.disks.get(i);
+            JSONObject tempJson = new JSONObject();
+            tempJson.put("name", tempDisc.name);
+            tempJson.put("load", tempDisc.sensors.loads.get(0).value);
+            resultJson.put(tempJson);
+        }
+        return resultJson;
     }
 
     public static String getMemoryUsage() {
-        return String.format("%.2f", (double)osBean.getTotalMemorySize()/GB-(double)osBean.getFreeMemorySize()/GB) + "/" + String.format("%.2f", (double)osBean.getTotalMemorySize()/GB);
+        return String.format("%.2f", (double)osMBean.getTotalMemorySize()/GB-(double)osMBean.getFreeMemorySize()/GB) + "/" + String.format("%.2f", (double)osMBean.getTotalMemorySize()/GB);
     }
 
     public static int getAvailableProcessors() {
@@ -79,9 +86,8 @@ public class SystemScanner {
     }
 
     public static String getCPUUsage() {
-        Process process = null;
         try {
-            process = Runtime.getRuntime().exec(new String[]{"wmic", "cpu", "get", "loadpercentage"});
+            Process process = Runtime.getRuntime().exec(new String[]{"wmic", "cpu", "get", "loadpercentage"});
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String result = "";
             try {
@@ -90,20 +96,61 @@ public class SystemScanner {
             if (result.equals("")) { result = "0"; }
             return result;
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            return "0";
         }
     }
 
-    public static Map<String, Double> getAllCPUTemp(){
-        Map<String, Double> tempMap = new LinkedHashMap<>();
+    public static JSONArray getAllCPUInfo(){
         Components components = JSensors.get.components();
-        if (!components.cpus.isEmpty()) {
-            Cpu cpu = components.cpus.get(0);
-            List<Temperature> temps = cpu.sensors.temperatures;
-            for (final Temperature temp : temps) {
-                tempMap.put(temp.name.substring(5), temp.value);
+        JSONArray resultJson = new JSONArray();
+        for (int i = 0; i < components.cpus.size(); i++) {
+            JSONObject cpuJson = new JSONObject();
+            JSONArray coresJson = new JSONArray();
+            Cpu temp = components.cpus.get(i);
+            if (!temp.sensors.loads.isEmpty()) {
+                for (int j = 0; j < temp.sensors.loads.size() - 1; j++) {
+                    if (!temp.sensors.loads.get(j).name.contains("Total")) {
+                        JSONObject tempJson = new JSONObject();
+                        tempJson.put("name", temp.sensors.loads.get(j).name.substring(5));
+                        tempJson.put("load", temp.sensors.loads.get(j).value);
+                        if (!temp.sensors.temperatures.isEmpty() && temp.sensors.temperatures.get(j) != null) {
+                            tempJson.put("temperature", temp.sensors.temperatures.get(j).value);
+                        } else {
+                            tempJson.put("temperature", 0);
+                        }
+                        coresJson.put(tempJson);
+                    }
+                }
             }
+            cpuJson.put("name", temp.name);
+            cpuJson.put("cores", coresJson);
+            resultJson.put(cpuJson);
         }
-        return tempMap;
+        return resultJson;
     }
+
+    public static JSONArray getAllGPUInfo(){
+        Components components = JSensors.get.components();
+        JSONArray resultJson = new JSONArray();
+        for (int i = 0; i < components.gpus.size(); i++) {
+            JSONObject cpuJson = new JSONObject();
+            Gpu temp = components.gpus.get(i);
+            if (!temp.sensors.loads.isEmpty()) {
+                for (int j = 0; j < temp.sensors.loads.size() - 1; j++) {
+                    if (temp.sensors.loads.get(j).name.contains("Core")) {
+                        cpuJson.put("load", temp.sensors.loads.get(j).value);
+                        if (!temp.sensors.temperatures.isEmpty()) {
+                            cpuJson.put("temperature", temp.sensors.temperatures.get(0));
+                        } else {
+                            cpuJson.put("temperature", 0);
+                        }
+                    }
+                }
+            }
+            cpuJson.put("name", temp.name);
+            resultJson.put(cpuJson);
+        }
+        return resultJson;
+    }
+
 }
