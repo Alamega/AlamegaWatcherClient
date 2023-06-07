@@ -54,7 +54,7 @@ public class SystemScanner {
         {
             if (!((double)driver.getTotalSpace() <= 0)) {
                 JSONObject tempJson = new JSONObject();
-                tempJson.put("name", driver.toString());
+                tempJson.put("name", driver.toString().substring(0,1));
                 tempJson.put("usage", (double)driver.getTotalSpace()/GB-(double)driver.getUsableSpace()/GB);
                 tempJson.put("free", (double)driver.getUsableSpace()/GB);
                 tempJson.put("total", (double)driver.getTotalSpace()/GB);
@@ -77,8 +77,12 @@ public class SystemScanner {
         return resultJson;
     }
 
-    public static String getMemoryUsage() {
-        return String.format("%.2f", (double)osMBean.getTotalMemorySize()/GB-(double)osMBean.getFreeMemorySize()/GB) + "/" + String.format("%.2f", (double)osMBean.getTotalMemorySize()/GB);
+    public static JSONObject getMemoryUsage() {
+        JSONObject memoryJson = new JSONObject();
+        memoryJson.put("usage", (double)osMBean.getTotalMemorySize()/GB - (double)osMBean.getFreeMemorySize()/GB);
+        memoryJson.put("free", (double)osMBean.getFreeMemorySize()/GB);
+        memoryJson.put("total", (double)osMBean.getTotalMemorySize()/GB);
+        return memoryJson;
     }
 
     public static int getAvailableProcessors() {
@@ -140,7 +144,7 @@ public class SystemScanner {
                     if (temp.sensors.loads.get(j).name.contains("Core")) {
                         cpuJson.put("load", temp.sensors.loads.get(j).value);
                         if (!temp.sensors.temperatures.isEmpty()) {
-                            cpuJson.put("temperature", temp.sensors.temperatures.get(0));
+                            cpuJson.put("temperature", temp.sensors.temperatures.get(0).value);
                         } else {
                             cpuJson.put("temperature", 0);
                         }
